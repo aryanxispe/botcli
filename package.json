@@ -1,10 +1,23 @@
 {
   "name": "botcli",
-  "version": "1.0.0",
-  "description": "Lightweight Telegram Bot Manager",
+  "version": "1.0.1",
+  "description": "A lightweight CLI tool to create and manage Telegram bots from your terminal.",
+  "author": "aryanxispe <aryanispe@gmail.com>",
+  "license": "MIT",
+  "keywords": [
+    "telegram",
+    "bot",
+    "cli",
+    "manager",
+    "automation"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aryanxispe/botcli.git"
+  },
   "main": "index.js",
   "bin": {
-    "botcli": "./index.js"
+    "botcli": "index.js"
   },
   "scripts": {
     "start": "node index.js"

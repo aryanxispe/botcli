@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "public": true,
+  "name": "botcli",
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/web/$1" }
+  ]
+}
