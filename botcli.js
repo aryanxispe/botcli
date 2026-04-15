@@ -7,7 +7,7 @@ const ora = require('ora');
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 
 /**
  * Configuration & Persistent Storage
@@ -44,6 +44,32 @@ async function loadBots() {
 async function saveBots(bots) {
     await ensureStorage();
     await fs.writeJson(BOTS_FILE, bots, { spaces: 2 });
+}
+
+/**
+ * Helper: Detect NPM Binary Path (cPanel Bypass)
+ */
+function getNpmPath() {
+    try {
+        // Find which node version is running
+        const nodeVersionMatch = process.version.match(/v(\d+)/);
+        const majorVersion = nodeVersionMatch ? nodeVersionMatch[1] : '20';
+        
+        const possiblePaths = [
+            'npm', // Default
+            `/opt/cpanel/ea-nodejs${majorVersion}/bin/npm`,
+            `/usr/local/bin/npm`,
+            `/usr/bin/npm`
+        ];
+
+        for (const p of possiblePaths) {
+            try {
+                if (p === 'npm') return 'npm';
+                if (fs.existsSync(p)) return p;
+            } catch (e) {}
+        }
+    } catch (err) {}
+    return 'npm';
 }
 
 /**
@@ -189,24 +215,26 @@ bot.on('message', (msg) => {
 }
 
 /**
- * Start Bot Logic with cPanel Fixes
+ * Start Bot Logic with Deep cPanel Bypass
  */
 async function startBot(botInfo) {
     const nodeModulesExist = await fs.pathExists(path.join(botInfo.path, 'node_modules'));
     
     if (!nodeModulesExist) {
-        const spinner = ora('Installing dependencies (Bypassing environment restrictions)...').start();
+        const spinner = ora('Installing dependencies (Bypassing cPanel restrictions)...').start();
         try {
+            const npmBin = getNpmPath();
+            
             await new Promise((resolve, reject) => {
-                // FORCE NPM to installation in the current directory and bypass virtual env prefixes
                 const env = { 
                     ...process.env, 
                     NPM_CONFIG_PREFIX: botInfo.path,
-                    NPM_CONFIG_USERCONFIG: '', // Reset user config
-                    NPM_CONFIG_GLOBALCONFIG: '' // Reset global config
+                    NPM_CONFIG_GLOBAL: 'false',
+                    NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org/'
                 };
 
-                const child = spawn('npm', ['install', '--prefix', '.', '--no-global', '--no-bin-links'], { 
+                // Use --no-bin-links for cPanel shared hosting filesystems
+                const child = spawn(npmBin, ['install', '--prefix', '.', '--no-bin-links', '--no-package-lock'], { 
                     cwd: botInfo.path, 
                     shell: true,
                     env
@@ -217,13 +245,16 @@ async function startBot(botInfo) {
 
                 child.on('close', (code) => {
                     if (code === 0) resolve();
-                    else reject(new Error(`NPM failed [Code ${code}]. Output: ${errorOutput.slice(0, 200)}`));
+                    else reject(new Error(`Exit Code ${code}. Search Path: ${npmBin}. Details: ${errorOutput.slice(0, 150)}`));
                 });
             });
             spinner.succeed(chalk.green('Dependencies installed.'));
         } catch (err) {
-            spinner.fail(chalk.red(`NPM Error: ${err.message}`));
-            console.log(chalk.yellow('\nTry manually: cd ' + botInfo.path + ' && npm install --no-bin-links'));
+            spinner.fail(chalk.red(`NPM Restricted: ${err.message}`));
+            console.log(chalk.yellow('\n[Troubleshoot] This server blocks automated installs.'));
+            console.log(chalk.gray('Please try running manually in terminal:'));
+            console.log(chalk.cyan(`cd ${botInfo.path} && npm install --no-bin-links`));
+            await pause();
             return;
         }
     }
