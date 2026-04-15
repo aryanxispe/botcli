@@ -7,7 +7,12 @@ const ora = require('ora');
 const fs = require('fs-extra');
 const path = require('path');
 const os = require('os');
-const { spawn, execSync } = require('child_process');
+const https = require('https');
+const { spawn } = require('child_process');
+
+// Current App Version
+const pkg = require('./package.json');
+const VERSION = pkg.version;
 
 /**
  * Configuration & Persistent Storage
@@ -47,16 +52,71 @@ async function saveBots(bots) {
 }
 
 /**
+ * Helper: Check for Updates
+ */
+async function checkForUpdates(manual = false) {
+    const spinner = manual ? ora('Checking for updates...').start() : null;
+    
+    return new Promise((resolve) => {
+        const options = {
+            hostname: 'raw.githubusercontent.com',
+            path: '/aryanxispe/botcli/main/package.json',
+            method: 'GET',
+            timeout: 5000
+        };
+
+        const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk; });
+            res.on('end', () => {
+                try {
+                    const remotePkg = JSON.parse(data);
+                    const remoteVersion = remotePkg.version;
+
+                    if (manual && spinner) {
+                        spinner.stop();
+                        if (remoteVersion === VERSION) {
+                            console.log(chalk.green(`\n✔ You are using the latest version (v${VERSION})`));
+                        } else {
+                            console.log(chalk.yellow.bold(`\n🚀 Update Available: v${remoteVersion}`));
+                            console.log(chalk.gray(`Current version: v${VERSION}`));
+                            console.log(chalk.white(`\nTo update, please run:`));
+                            console.log(chalk.cyan(`npx github:aryanxispe/botcli\n`));
+                        }
+                    }
+                    resolve(remoteVersion !== VERSION);
+                } catch (e) {
+                    if (manual && spinner) spinner.fail('Failed to parse update data.');
+                    resolve(false);
+                }
+            });
+        });
+
+        req.on('error', () => {
+            if (manual && spinner) spinner.fail('Network error while checking updates.');
+            resolve(false);
+        });
+
+        req.on('timeout', () => {
+            req.destroy();
+            if (manual && spinner) spinner.fail('Update check timed out.');
+            resolve(false);
+        });
+
+        req.end();
+    });
+}
+
+/**
  * Helper: Detect NPM Binary Path (cPanel Bypass)
  */
 function getNpmPath() {
     try {
-        // Find which node version is running
         const nodeVersionMatch = process.version.match(/v(\d+)/);
         const majorVersion = nodeVersionMatch ? nodeVersionMatch[1] : '20';
         
         const possiblePaths = [
-            'npm', // Default
+            'npm',
             `/opt/cpanel/ea-nodejs${majorVersion}/bin/npm`,
             `/usr/local/bin/npm`,
             `/usr/bin/npm`
@@ -78,6 +138,7 @@ function getNpmPath() {
 async function mainMenu() {
     console.clear();
     console.log(chalk.blue.bold('\n--- 🤖 BOTCLI: Telegram Bot Manager ---'));
+    console.log(chalk.gray(`Version: v${VERSION}\n`));
     
     const { action } = await inquirer.prompt([
         {
@@ -88,6 +149,7 @@ async function mainMenu() {
                 { name: '🚀 1. Create Bot', value: 'create' },
                 { name: '📋 2. List Bots', value: 'list' },
                 { name: '❌ 3. Delete Bot', value: 'delete' },
+                { name: '🔄 4. Check for Updates', value: 'update' },
                 new inquirer.Separator(),
                 { name: 'Exit', value: 'exit' }
             ]
@@ -103,6 +165,11 @@ async function mainMenu() {
             break;
         case 'delete':
             await deleteBot();
+            break;
+        case 'update':
+            await checkForUpdates(true);
+            await pause();
+            await mainMenu();
             break;
         case 'exit':
             console.log(chalk.gray('Goodbye!'));
@@ -233,7 +300,6 @@ async function startBot(botInfo) {
                     NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org/'
                 };
 
-                // Use --no-bin-links for cPanel shared hosting filesystems
                 const child = spawn(npmBin, ['install', '--prefix', '.', '--no-bin-links', '--no-package-lock'], { 
                     cwd: botInfo.path, 
                     shell: true,
@@ -245,7 +311,7 @@ async function startBot(botInfo) {
 
                 child.on('close', (code) => {
                     if (code === 0) resolve();
-                    else reject(new Error(`Exit Code ${code}. Search Path: ${npmBin}. Details: ${errorOutput.slice(0, 150)}`));
+                    else reject(new Error(`Exit Code ${code}. Details: ${errorOutput.slice(0, 150)}`));
                 });
             });
             spinner.succeed(chalk.green('Dependencies installed.'));
