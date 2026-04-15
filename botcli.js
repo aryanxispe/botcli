@@ -16,95 +16,21 @@ const VERSION = pkg.version;
 
 /**
  * Configuration & Persistent Storage
+ * v1.3.0 'Nexus' Update: Using shared dependency store in ~/.botcli
  */
 const BOTS_DATA_DIR = path.join(os.homedir(), '.botcli');
 const BOTS_FILE = path.join(BOTS_DATA_DIR, 'bots.json');
 const BOTS_ROOT = path.join(os.homedir(), 'bots');
+const SHARED_LIB_PATH = path.join(BOTS_DATA_DIR, 'node_modules', 'node-telegram-bot-api');
 
 /**
- * Helper: Ensure Storage Exists
+ * Helper: Ensure Storage & Nexus Engine Exist
  */
 async function ensureStorage() {
     await fs.ensureDir(BOTS_DATA_DIR);
     if (!await fs.pathExists(BOTS_FILE)) {
         await fs.writeJson(BOTS_FILE, []);
     }
-}
-
-/**
- * Helper: Load Bots
- */
-async function loadBots() {
-    await ensureStorage();
-    try {
-        return await fs.readJson(BOTS_FILE);
-    } catch (err) {
-        return [];
-    }
-}
-
-/**
- * Helper: Save Bots
- */
-async function saveBots(bots) {
-    await ensureStorage();
-    await fs.writeJson(BOTS_FILE, bots, { spaces: 2 });
-}
-
-/**
- * Helper: Check for Updates
- */
-async function checkForUpdates(manual = false) {
-    const spinner = manual ? ora('Checking for updates...').start() : null;
-    
-    return new Promise((resolve) => {
-        const options = {
-            hostname: 'raw.githubusercontent.com',
-            path: '/aryanxispe/botcli/main/package.json',
-            method: 'GET',
-            timeout: 5000
-        };
-
-        const req = https.request(options, (res) => {
-            let data = '';
-            res.on('data', (chunk) => { data += chunk; });
-            res.on('end', () => {
-                try {
-                    const remotePkg = JSON.parse(data);
-                    const remoteVersion = remotePkg.version;
-
-                    if (manual && spinner) {
-                        spinner.stop();
-                        if (remoteVersion === VERSION) {
-                            console.log(chalk.green(`\n✔ You are using the latest version (v${VERSION})`));
-                        } else {
-                            console.log(chalk.yellow.bold(`\n🚀 Update Available: v${remoteVersion}`));
-                            console.log(chalk.gray(`Current version: v${VERSION}`));
-                            console.log(chalk.white(`\nTo update, please run:`));
-                            console.log(chalk.cyan(`npx github:aryanxispe/botcli\n`));
-                        }
-                    }
-                    resolve(remoteVersion !== VERSION);
-                } catch (e) {
-                    if (manual && spinner) spinner.fail('Failed to parse update data.');
-                    resolve(false);
-                }
-            });
-        });
-
-        req.on('error', () => {
-            if (manual && spinner) spinner.fail('Network error while checking updates.');
-            resolve(false);
-        });
-
-        req.on('timeout', () => {
-            req.destroy();
-            if (manual && spinner) spinner.fail('Update check timed out.');
-            resolve(false);
-        });
-
-        req.end();
-    });
 }
 
 /**
@@ -133,12 +59,78 @@ function getNpmPath() {
 }
 
 /**
+ * Helper: Initialize Nexus Engine (One-time setup)
+ */
+async function ensureNexus() {
+    const nexusExists = await fs.pathExists(SHARED_LIB_PATH);
+    if (!nexusExists) {
+        console.log(chalk.blue.bold('\n--- ⚡ Initializing Nexus Engine (Shared Dependencies) ---'));
+        const spinner = ora('Setting up dependency store in ~/.botcli (One-time process)...').start();
+        
+        try {
+            const npmBin = getNpmPath();
+            await new Promise((resolve, reject) => {
+                const child = spawn(npmBin, ['install', 'node-telegram-bot-api', '--no-bin-links'], { 
+                    cwd: BOTS_DATA_DIR, 
+                    shell: true 
+                });
+                child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`Failed to initialize Nexus [Code ${code}]`)));
+            });
+            spinner.succeed(chalk.green('Nexus Engine initialized successfully!'));
+        } catch (err) {
+            spinner.fail(chalk.red(`Nexus Initialization Error: ${err.message}`));
+            console.log(chalk.yellow('\nPlease run manually to fix:'));
+            console.log(chalk.cyan(`cd ~/.botcli && npm install node-telegram-bot-api`));
+            process.exit(1);
+        }
+    }
+}
+
+/**
+ * Helper: Check for Updates
+ */
+async function checkForUpdates(manual = false) {
+    const spinner = manual ? ora('Checking for updates...').start() : null;
+    
+    return new Promise((resolve) => {
+        const options = {
+            hostname: 'raw.githubusercontent.com',
+            path: '/aryanxispe/botcli/main/package.json',
+            method: 'GET',
+            timeout: 5000
+        };
+
+        const req = https.request(options, (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk; });
+            res.on('end', () => {
+                try {
+                    const remotePkg = JSON.parse(data);
+                    const remoteVersion = remotePkg.version;
+                    if (manual && spinner) {
+                        spinner.stop();
+                        if (remoteVersion === VERSION) console.log(chalk.green(`\n✔ You are on the latest version (v${VERSION})`));
+                        else {
+                            console.log(chalk.yellow.bold(`\n🚀 Update Available: v${remoteVersion}`));
+                            console.log(chalk.white(`To update: `) + chalk.cyan(`npx github:aryanxispe/botcli\n`));
+                        }
+                    }
+                    resolve(remoteVersion !== VERSION);
+                } catch (e) { resolve(false); }
+            });
+        });
+        req.on('error', () => { if (manual && spinner) spinner.fail('Network error.'); resolve(false); });
+        req.end();
+    });
+}
+
+/**
  * Main Menu
  */
 async function mainMenu() {
     console.clear();
     console.log(chalk.blue.bold('\n--- 🤖 BOTCLI: Telegram Bot Manager ---'));
-    console.log(chalk.gray(`Version: v${VERSION}\n`));
+    console.log(chalk.gray(`Version: v${VERSION} (Nexus Engine Active)\n`));
     
     const { action } = await inquirer.prompt([
         {
@@ -157,23 +149,11 @@ async function mainMenu() {
     ]);
 
     switch (action) {
-        case 'create':
-            await createBotFlow();
-            break;
-        case 'list':
-            await listBots();
-            break;
-        case 'delete':
-            await deleteBot();
-            break;
-        case 'update':
-            await checkForUpdates(true);
-            await pause();
-            await mainMenu();
-            break;
-        case 'exit':
-            console.log(chalk.gray('Goodbye!'));
-            process.exit(0);
+        case 'create': await createBotFlow(); break;
+        case 'list': await listBots(); break;
+        case 'delete': await deleteBot(); break;
+        case 'update': await checkForUpdates(true); await pause(); await mainMenu(); break;
+        case 'exit': process.exit(0);
     }
 }
 
@@ -182,32 +162,23 @@ async function mainMenu() {
  */
 async function createBotFlow() {
     const questions = [
-        {
-            type: 'input',
-            name: 'name',
-            message: 'Enter Bot Name:',
-            validate: (val) => val.length > 0 ? true : 'Name cannot be empty'
-        },
-        {
-            type: 'input',
-            name: 'token',
-            message: 'Enter Telegram Bot Token:',
-            validate: (val) => val.length > 0 ? true : 'Token cannot be empty'
-        }
+        { type: 'input', name: 'name', message: 'Enter Bot Name:' },
+        { type: 'input', name: 'token', message: 'Enter Telegram Bot Token:' }
     ];
 
     const answers = await inquirer.prompt(questions);
-    const spinner = ora('Generating bot...').start();
+    const spinner = ora('Generating bot via Nexus Engine...').start();
 
     try {
         const username = os.userInfo().username;
         const subdomain = `${answers.name.toLowerCase().replace(/\s+/g, '-')}-${username}.aryanispe.in`;
-        
         const botDir = path.join(BOTS_ROOT, subdomain);
         await fs.ensureDir(botDir);
 
+        // v1.3.0 logic: Use ABSOLUTE path to shared dependency
+        const escapedSharedPath = SHARED_LIB_PATH.replace(/\\/g, '/');
         const botCode = `
-const TelegramBot = require('node-telegram-bot-api');
+const TelegramBot = require('${escapedSharedPath}');
 
 const token = '${answers.token}';
 const bot = new TelegramBot(token, { polling: true });
@@ -217,23 +188,14 @@ console.log('Listening for messages...');
 
 bot.on('message', (msg) => {
     const chatId = msg.chat.id;
-    bot.sendMessage(chatId, 'Hello! I am ${answers.name}. I was created using botcli!');
+    bot.sendMessage(chatId, 'Hello! I am ${answers.name}. I was created using botcli Nexus!');
 });
         `;
 
         await fs.writeFile(path.join(botDir, 'bot.js'), botCode);
         
-        const botPkg = {
-            name: subdomain,
-            version: "1.0.0",
-            main: "bot.js",
-            dependencies: {
-                "node-telegram-bot-api": "^0.64.0"
-            }
-        };
-        await fs.writeJson(path.join(botDir, 'package.json'), botPkg, { spaces: 2 });
-
-        const bots = await loadBots();
+        // metadata push
+        const bots = await fs.readJson(BOTS_FILE);
         const newBot = {
             name: answers.name,
             token: answers.token,
@@ -243,187 +205,92 @@ bot.on('message', (msg) => {
             status: 'stopped'
         };
         bots.push(newBot);
-        await saveBots(bots);
+        await fs.writeJson(BOTS_FILE, bots, { spaces: 2 });
 
-        spinner.succeed(chalk.green(`Bot created successfully!`));
-        console.log(chalk.blue(`\nSubdomain: `) + chalk.white(subdomain));
-        console.log(chalk.blue(`Path: `) + chalk.white(botDir));
+        spinner.succeed(chalk.green(`Bot ${answers.name} created instantly!`));
+        
+        const { postAction } = await inquirer.prompt([{
+            type: 'list',
+            name: 'postAction',
+            message: 'What next?',
+            choices: [
+                { name: '⚡ 1. Start Bot (Instant)', value: 'start' },
+                { name: '🔙 2. Back to Menu', value: 'menu' }
+            ]
+        }]);
 
-        const { postAction } = await inquirer.prompt([
-            {
-                type: 'list',
-                name: 'postAction',
-                message: 'What would you like to do next?',
-                choices: [
-                    { name: '🔥 1. Start Bot', value: 'start' },
-                    { name: '➕ 2. Create Another Bot', value: 'again' },
-                    { name: '🔙 3. Back to Main Menu', value: 'menu' },
-                    { name: 'Exit', value: 'exit' }
-                ]
-            }
-        ]);
+        if (postAction === 'start') await startBot(newBot);
+        else await mainMenu();
 
-        if (postAction === 'start') {
-            await startBot(newBot);
-        } else if (postAction === 'again') {
-            return createBotFlow();
-        } else if (postAction === 'menu') {
-            return mainMenu();
-        } else {
-            process.exit(0);
-        }
-
-    } catch (err) {
-        spinner.fail(chalk.red(`Error: ${err.message}`));
-    }
-
+    } catch (err) { spinner.fail(chalk.red(`Error: ${err.message}`)); }
     await pause();
     mainMenu();
 }
 
 /**
- * Start Bot Logic with Deep cPanel Bypass
+ * Start Bot (Instant in v1.3.0)
  */
 async function startBot(botInfo) {
-    const nodeModulesExist = await fs.pathExists(path.join(botInfo.path, 'node_modules'));
-    
-    if (!nodeModulesExist) {
-        const spinner = ora('Installing dependencies (Bypassing cPanel restrictions)...').start();
-        try {
-            const npmBin = getNpmPath();
-            
-            await new Promise((resolve, reject) => {
-                const env = { 
-                    ...process.env, 
-                    NPM_CONFIG_PREFIX: botInfo.path,
-                    NPM_CONFIG_GLOBAL: 'false',
-                    NPM_CONFIG_REGISTRY: 'https://registry.npmjs.org/'
-                };
-
-                const child = spawn(npmBin, ['install', '--prefix', '.', '--no-bin-links', '--no-package-lock'], { 
-                    cwd: botInfo.path, 
-                    shell: true,
-                    env
-                });
-
-                let errorOutput = '';
-                child.stderr.on('data', (data) => { errorOutput += data.toString(); });
-
-                child.on('close', (code) => {
-                    if (code === 0) resolve();
-                    else reject(new Error(`Exit Code ${code}. Details: ${errorOutput.slice(0, 150)}`));
-                });
-            });
-            spinner.succeed(chalk.green('Dependencies installed.'));
-        } catch (err) {
-            spinner.fail(chalk.red(`NPM Restricted: ${err.message}`));
-            console.log(chalk.yellow('\n[Troubleshoot] This server blocks automated installs.'));
-            console.log(chalk.gray('Please try running manually in terminal:'));
-            console.log(chalk.cyan(`cd ${botInfo.path} && npm install --no-bin-links`));
-            await pause();
-            return;
-        }
-    }
-
-    const startSpinner = ora(`Starting bot ${botInfo.name}...`).start();
+    const spinner = ora(`Launching bot ${botInfo.name}...`).start();
     try {
         const child = spawn('node', ['bot.js'], {
             cwd: botInfo.path,
             detached: true,
             stdio: 'ignore'
         });
-
         child.unref();
         
-        const bots = await loadBots();
-        const botIdx = bots.findIndex(b => b.subdomain === botInfo.subdomain);
-        if (botIdx !== -1) {
-            bots[botIdx].status = 'running';
-            bots[botIdx].pid = child.pid;
-            await saveBots(bots);
+        // Update registry
+        const bots = await fs.readJson(BOTS_FILE);
+        const idx = bots.findIndex(b => b.subdomain === botInfo.subdomain);
+        if (idx !== -1) {
+            bots[idx].status = 'running';
+            bots[idx].pid = child.pid;
+            await fs.writeJson(BOTS_FILE, bots, { spaces: 2 });
         }
 
-        startSpinner.succeed(chalk.green(`Bot ${botInfo.name} is running!`));
-        console.log(chalk.gray(`\n[PID: ${child.pid}] Use 'List Bots' to check status.`));
-    } catch (err) {
-        startSpinner.fail(chalk.red(`Error: ${err.message}`));
-    }
+        spinner.succeed(chalk.green(`Bot is now live! (Nexus Active)`));
+        console.log(chalk.gray(`[PID: ${child.pid}]`));
+    } catch (err) { spinner.fail(chalk.red(`Start Error: ${err.message}`)); }
 }
 
-/**
- * List Bots
- */
 async function listBots() {
     try {
-        const bots = await loadBots();
-        if (bots.length === 0) {
-            console.log(chalk.yellow('\nNo bots found.'));
-        } else {
-            console.log(chalk.blue.bold('\n--- Registered Bots ---'));
-            bots.forEach((bot, index) => {
-                const statusStr = bot.status === 'running' ? chalk.green('● Running') : chalk.red('○ Stopped');
-                console.log(`${index + 1}. ${chalk.bold(bot.name)} | ${statusStr}`);
-                console.log(chalk.gray(`   Subdomain: ${bot.subdomain}`));
+        const bots = await fs.readJson(BOTS_FILE);
+        if (bots.length === 0) console.log(chalk.yellow('\nNo bots found.'));
+        else {
+            console.log(chalk.blue.bold('\n--- Registered Bots (Nexus Engine) ---'));
+            bots.forEach((bot, i) => {
+                const status = bot.status === 'running' ? chalk.green('● Active') : chalk.red('○ Stopped');
+                console.log(`${i + 1}. ${chalk.bold(bot.name)} | ${status}`);
             });
         }
-    } catch (err) {
-        console.log(chalk.red(`Error: ${err.message}`));
-    }
+    } catch (e) { console.log(chalk.red(e.message)); }
     await pause();
     mainMenu();
 }
 
-/**
- * Delete Bot
- */
 async function deleteBot() {
     try {
-        const bots = await loadBots();
-        if (bots.length === 0) {
-            console.log(chalk.yellow('\nNo bots to delete.'));
-            await pause();
-            return mainMenu();
-        }
-
-        const { botIndex } = await inquirer.prompt([
-            {
-                type: 'list',
-                name: 'botIndex',
-                message: 'Select bot to delete:',
-                choices: bots.map((b, i) => ({ name: `${b.name} (${b.subdomain})`, value: i }))
-            }
-        ]);
-
-        const deletedBot = bots[botIndex];
-        const { confirm } = await inquirer.prompt([{
-            type: 'confirm',
-            name: 'confirm',
-            message: `Are you sure you want to delete ${deletedBot.name}? (This only removes the config data)`,
-            default: false
+        const bots = await fs.readJson(BOTS_FILE);
+        if (bots.length === 0) return mainMenu();
+        const { idx } = await inquirer.prompt([{
+            type: 'list', name: 'idx', message: 'Select to delete:',
+            choices: bots.map((b, i) => ({ name: b.name, value: i }))
         }]);
-
-        if (confirm) {
-            bots.splice(botIndex, 1);
-            await saveBots(bots);
-            console.log(chalk.green(`\nBot removed from manager.`));
-        }
-
-    } catch (err) {
-        console.log(chalk.red(`Error: ${err.message}`));
-    }
+        bots.splice(idx, 1);
+        await fs.writeJson(BOTS_FILE, bots, { spaces: 2 });
+        console.log(chalk.green('Deleted.'));
+    } catch (e) {}
     await pause();
     mainMenu();
 }
 
-/**
- * Utility: Pause
- */
-async function pause() {
-    return inquirer.prompt([{ type: 'input', name: 'key', message: 'Press Enter to continue...' }]);
-}
+async function pause() { return inquirer.prompt([{ type: 'input', name: 'k', message: 'Press Enter...' }]); }
 
 async function run() {
     await ensureStorage();
+    await ensureNexus();
     mainMenu();
 }
 
