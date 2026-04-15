@@ -107,15 +107,12 @@ async function createBotFlow() {
     const spinner = ora('Generating bot...').start();
 
     try {
-        // 1. Generate Subdomain
         const username = os.userInfo().username;
         const subdomain = `${answers.name.toLowerCase().replace(/\s+/g, '-')}-${username}.aryanispe.in`;
         
-        // 2. Setup Folder
         const botDir = path.join(BOTS_ROOT, subdomain);
         await fs.ensureDir(botDir);
 
-        // 3. Generate Bot Code
         const botCode = `
 const TelegramBot = require('node-telegram-bot-api');
 
@@ -143,7 +140,6 @@ bot.on('message', (msg) => {
         };
         await fs.writeJson(path.join(botDir, 'package.json'), botPkg, { spaces: 2 });
 
-        // 4. Update bots.json
         const bots = await loadBots();
         const newBot = {
             name: answers.name,
@@ -160,7 +156,6 @@ bot.on('message', (msg) => {
         console.log(chalk.blue(`\nSubdomain: `) + chalk.white(subdomain));
         console.log(chalk.blue(`Path: `) + chalk.white(botDir));
 
-        // Post-creation menu
         const { postAction } = await inquirer.prompt([
             {
                 type: 'list',
@@ -175,16 +170,14 @@ bot.on('message', (msg) => {
             }
         ]);
 
-        switch (postAction) {
-            case 'start':
-                await startBot(newBot);
-                break;
-            case 'again':
-                return createBotFlow();
-            case 'menu':
-                return mainMenu();
-            case 'exit':
-                process.exit(0);
+        if (postAction === 'start') {
+            await startBot(newBot);
+        } else if (postAction === 'again') {
+            return createBotFlow();
+        } else if (postAction === 'menu') {
+            return mainMenu();
+        } else {
+            process.exit(0);
         }
 
     } catch (err) {
@@ -196,37 +189,55 @@ bot.on('message', (msg) => {
 }
 
 /**
- * Start Bot Logic
+ * Start Bot Logic with cPanel Fixes
  */
 async function startBot(botInfo) {
     const nodeModulesExist = await fs.pathExists(path.join(botInfo.path, 'node_modules'));
     
     if (!nodeModulesExist) {
-        const spinner = ora('Installing dependencies (this may take a minute)...').start();
+        const spinner = ora('Installing dependencies (Bypassing environment restrictions)...').start();
         try {
             await new Promise((resolve, reject) => {
-                const child = spawn('npm', ['install'], { cwd: botInfo.path, shell: true });
-                child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`NPM install failed with code ${code}`)));
+                // FORCE NPM to installation in the current directory and bypass virtual env prefixes
+                const env = { 
+                    ...process.env, 
+                    NPM_CONFIG_PREFIX: botInfo.path,
+                    NPM_CONFIG_USERCONFIG: '', // Reset user config
+                    NPM_CONFIG_GLOBALCONFIG: '' // Reset global config
+                };
+
+                const child = spawn('npm', ['install', '--prefix', '.', '--no-global', '--no-bin-links'], { 
+                    cwd: botInfo.path, 
+                    shell: true,
+                    env
+                });
+
+                let errorOutput = '';
+                child.stderr.on('data', (data) => { errorOutput += data.toString(); });
+
+                child.on('close', (code) => {
+                    if (code === 0) resolve();
+                    else reject(new Error(`NPM failed [Code ${code}]. Output: ${errorOutput.slice(0, 200)}`));
+                });
             });
             spinner.succeed(chalk.green('Dependencies installed.'));
         } catch (err) {
-            spinner.fail(chalk.red(`Error: ${err.message}`));
+            spinner.fail(chalk.red(`NPM Error: ${err.message}`));
+            console.log(chalk.yellow('\nTry manually: cd ' + botInfo.path + ' && npm install --no-bin-links'));
             return;
         }
     }
 
     const startSpinner = ora(`Starting bot ${botInfo.name}...`).start();
     try {
-        // Run bot in background
         const child = spawn('node', ['bot.js'], {
             cwd: botInfo.path,
             detached: true,
             stdio: 'ignore'
         });
 
-        child.unref(); // Allow the parent process (CLI) to exit without killing the bot
+        child.unref();
         
-        // Update status in bots.json
         const bots = await loadBots();
         const botIdx = bots.findIndex(b => b.subdomain === botInfo.subdomain);
         if (botIdx !== -1) {
@@ -235,7 +246,7 @@ async function startBot(botInfo) {
             await saveBots(bots);
         }
 
-        startSpinner.succeed(chalk.green(`Bot ${botInfo.name} is now running in the background!`));
+        startSpinner.succeed(chalk.green(`Bot ${botInfo.name} is running!`));
         console.log(chalk.gray(`\n[PID: ${child.pid}] Use 'List Bots' to check status.`));
     } catch (err) {
         startSpinner.fail(chalk.red(`Error: ${err.message}`));
@@ -295,7 +306,6 @@ async function deleteBot() {
         }]);
 
         if (confirm) {
-            // If running, we should ideally kill it, but for now we'll just remove the metadata
             bots.splice(botIndex, 1);
             await saveBots(bots);
             console.log(chalk.green(`\nBot removed from manager.`));
@@ -315,5 +325,9 @@ async function pause() {
     return inquirer.prompt([{ type: 'input', name: 'key', message: 'Press Enter to continue...' }]);
 }
 
-// Start CLI
-mainMenu();
+async function run() {
+    await ensureStorage();
+    mainMenu();
+}
+
+run();
