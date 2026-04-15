@@ -11,8 +11,6 @@ const { spawn } = require('child_process');
 
 /**
  * Configuration & Persistent Storage
- * We store data in ~/.botcli/ to avoid permission issues on servers (cPanel/VPS)
- * and ensure data persists across npx runs.
  */
 const BOTS_DATA_DIR = path.join(os.homedir(), '.botcli');
 const BOTS_FILE = path.join(BOTS_DATA_DIR, 'bots.json');
@@ -135,7 +133,6 @@ bot.on('message', (msg) => {
 
         await fs.writeFile(path.join(botDir, 'bot.js'), botCode);
         
-        // Create local package.json for the bot folder
         const botPkg = {
             name: subdomain,
             version: "1.0.0",
@@ -148,13 +145,15 @@ bot.on('message', (msg) => {
 
         // 4. Update bots.json
         const bots = await loadBots();
-        bots.push({
+        const newBot = {
             name: answers.name,
             token: answers.token,
             subdomain: subdomain,
             path: botDir,
-            createdAt: new Date().toISOString()
-        });
+            createdAt: new Date().toISOString(),
+            status: 'stopped'
+        };
+        bots.push(newBot);
         await saveBots(bots);
 
         spinner.succeed(chalk.green(`Bot created successfully!`));
@@ -168,25 +167,23 @@ bot.on('message', (msg) => {
                 name: 'postAction',
                 message: 'What would you like to do next?',
                 choices: [
-                    '1. Start Bot (Coming Soon)',
-                    '2. Create Another Bot',
-                    '3. Back to Main Menu',
-                    '4. Exit'
+                    { name: '🔥 1. Start Bot', value: 'start' },
+                    { name: '➕ 2. Create Another Bot', value: 'again' },
+                    { name: '🔙 3. Back to Main Menu', value: 'menu' },
+                    { name: 'Exit', value: 'exit' }
                 ]
             }
         ]);
 
         switch (postAction) {
-            case '1. Start Bot (Coming Soon)':
-                console.log(chalk.yellow('\n[Info] This feature is coming soon!'));
-                await pause();
+            case 'start':
+                await startBot(newBot);
+                break;
+            case 'again':
                 return createBotFlow();
-            case '2. Create Another Bot':
-                return createBotFlow();
-            case '3. Back to Main Menu':
+            case 'menu':
                 return mainMenu();
-            case '4. Exit':
-                console.log(chalk.gray('Goodbye!'));
+            case 'exit':
                 process.exit(0);
         }
 
@@ -196,6 +193,53 @@ bot.on('message', (msg) => {
 
     await pause();
     mainMenu();
+}
+
+/**
+ * Start Bot Logic
+ */
+async function startBot(botInfo) {
+    const nodeModulesExist = await fs.pathExists(path.join(botInfo.path, 'node_modules'));
+    
+    if (!nodeModulesExist) {
+        const spinner = ora('Installing dependencies (this may take a minute)...').start();
+        try {
+            await new Promise((resolve, reject) => {
+                const child = spawn('npm', ['install'], { cwd: botInfo.path, shell: true });
+                child.on('close', (code) => code === 0 ? resolve() : reject(new Error(`NPM install failed with code ${code}`)));
+            });
+            spinner.succeed(chalk.green('Dependencies installed.'));
+        } catch (err) {
+            spinner.fail(chalk.red(`Error: ${err.message}`));
+            return;
+        }
+    }
+
+    const startSpinner = ora(`Starting bot ${botInfo.name}...`).start();
+    try {
+        // Run bot in background
+        const child = spawn('node', ['bot.js'], {
+            cwd: botInfo.path,
+            detached: true,
+            stdio: 'ignore'
+        });
+
+        child.unref(); // Allow the parent process (CLI) to exit without killing the bot
+        
+        // Update status in bots.json
+        const bots = await loadBots();
+        const botIdx = bots.findIndex(b => b.subdomain === botInfo.subdomain);
+        if (botIdx !== -1) {
+            bots[botIdx].status = 'running';
+            bots[botIdx].pid = child.pid;
+            await saveBots(bots);
+        }
+
+        startSpinner.succeed(chalk.green(`Bot ${botInfo.name} is now running in the background!`));
+        console.log(chalk.gray(`\n[PID: ${child.pid}] Use 'List Bots' to check status.`));
+    } catch (err) {
+        startSpinner.fail(chalk.red(`Error: ${err.message}`));
+    }
 }
 
 /**
@@ -209,7 +253,9 @@ async function listBots() {
         } else {
             console.log(chalk.blue.bold('\n--- Registered Bots ---'));
             bots.forEach((bot, index) => {
-                console.log(`${index + 1}. ${chalk.green(bot.name)} (${bot.subdomain})`);
+                const statusStr = bot.status === 'running' ? chalk.green('● Running') : chalk.red('○ Stopped');
+                console.log(`${index + 1}. ${chalk.bold(bot.name)} | ${statusStr}`);
+                console.log(chalk.gray(`   Subdomain: ${bot.subdomain}`));
             });
         }
     } catch (err) {
@@ -249,6 +295,7 @@ async function deleteBot() {
         }]);
 
         if (confirm) {
+            // If running, we should ideally kill it, but for now we'll just remove the metadata
             bots.splice(botIndex, 1);
             await saveBots(bots);
             console.log(chalk.green(`\nBot removed from manager.`));
