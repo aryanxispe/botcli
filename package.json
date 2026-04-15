@@ -15,9 +15,9 @@
     "type": "git",
     "url": "https://github.com/aryanxispe/botcli.git"
   },
-  "main": "index.js",
+  "main": "botcli.js",
   "bin": {
-    "botcli": "index.js"
+    "botcli": "botcli.js"
   },
   "scripts": {
     "start": "node index.js"
