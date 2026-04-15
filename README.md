@@ -1,29 +1,55 @@
-# botcli 🤖
+# BotCLI
 
-A lightweight CLI tool to create and manage Telegram bots directly from your terminal.
+Professional Telegram Bot Management CLI. Create, manage, and deploy bots directly from your terminal with instant folder generation and automated subdomain simulation.
+
+## 🌐 Live Presence
+View the tool in action, along with a mechanical demo:
+**[https://botcli.vercel.app/](https://botcli.vercel.app/)**
+
+---
 
 ## 🚀 Installation
 
-You don't even need to install it! Just run:
+You don't need to install anything globally. You can run the latest version directly from GitHub:
+
 ```bash
-npx botcli
+npx github:aryanxispe/botcli
 ```
+
+*Note: Once published to NPM, you can use `npx botcli`.*
+
+---
 
 ## ✨ Features
 
-- **Interactive UI**: Simple menus to manage everything.
-- **Smart Generation**: Automatically creates folders and bot code.
-- **Subdomain Simulation**: Generates unique subdomains for your bots.
-- **Local Management**: Tracks all your bots in a local `bots.json` file.
+- **Instant Provisioning**: Zero-config folder and bot logic generation.
+- **Dynamic Subdomains**: Automated unique subdomains for each bot workspace.
+- **Technical Minimalism**: High-performance CLI interface using `commander` and `inquirer`.
+- **Local Registry**: State management via a local `bots.json` file.
+
+---
 
 ## 🛠️ Commands
 
-1. **Create Bot**: Setup a new Telegram bot directory and template code.
-2. **List Bots**: View all your managed bots and their subdomains.
-3. **Delete Bot**: Remove a bot from the manager.
+### 1. Create Bot
+Initializes a new project directory with a bot template and pre-configured `package.json`.
 
-## 📝 License
-MIT
+### 2. List Bots
+Displays all managed bots, their tokens, and their respective simulated subdomains.
+
+### 3. Delete Bot
+Safely removes a bot from the local registry and cleans up resources.
 
 ---
-Created with ❤️ by [aryanxispe](https://github.com/aryanxispe)
+
+## 📂 Project Structure
+
+- `botcli.js`: Main CLI entry point.
+- `index.html`: Premium landing page.
+- `style.css`: Technical design system.
+- `bots.json`: Metadata storage.
+
+---
+
+## 📄 License
+MIT © [aryanxispe](https://github.com/aryanxispe)
