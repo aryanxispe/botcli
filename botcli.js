@@ -9,9 +9,44 @@ const path = require('path');
 const os = require('os');
 const { spawn } = require('child_process');
 
-// Configuration
-const BOTS_FILE = path.join(__dirname, 'bots.json');
+/**
+ * Configuration & Persistent Storage
+ * We store data in ~/.botcli/ to avoid permission issues on servers (cPanel/VPS)
+ * and ensure data persists across npx runs.
+ */
+const BOTS_DATA_DIR = path.join(os.homedir(), '.botcli');
+const BOTS_FILE = path.join(BOTS_DATA_DIR, 'bots.json');
 const BOTS_ROOT = path.join(os.homedir(), 'bots');
+
+/**
+ * Helper: Ensure Storage Exists
+ */
+async function ensureStorage() {
+    await fs.ensureDir(BOTS_DATA_DIR);
+    if (!await fs.pathExists(BOTS_FILE)) {
+        await fs.writeJson(BOTS_FILE, []);
+    }
+}
+
+/**
+ * Helper: Load Bots
+ */
+async function loadBots() {
+    await ensureStorage();
+    try {
+        return await fs.readJson(BOTS_FILE);
+    } catch (err) {
+        return [];
+    }
+}
+
+/**
+ * Helper: Save Bots
+ */
+async function saveBots(bots) {
+    await ensureStorage();
+    await fs.writeJson(BOTS_FILE, bots, { spaces: 2 });
+}
 
 /**
  * Main Menu
@@ -26,26 +61,26 @@ async function mainMenu() {
             name: 'action',
             message: 'Main Menu:',
             choices: [
-                '1. Create Bot',
-                '2. List Bots',
-                '3. Delete Bot',
+                { name: '🚀 1. Create Bot', value: 'create' },
+                { name: '📋 2. List Bots', value: 'list' },
+                { name: '❌ 3. Delete Bot', value: 'delete' },
                 new inquirer.Separator(),
-                'Exit'
+                { name: 'Exit', value: 'exit' }
             ]
         }
     ]);
 
     switch (action) {
-        case '1. Create Bot':
+        case 'create':
             await createBotFlow();
             break;
-        case '2. List Bots':
+        case 'list':
             await listBots();
             break;
-        case '3. Delete Bot':
+        case 'delete':
             await deleteBot();
             break;
-        case 'Exit':
+        case 'exit':
             console.log(chalk.gray('Goodbye!'));
             process.exit(0);
     }
@@ -112,7 +147,7 @@ bot.on('message', (msg) => {
         await fs.writeJson(path.join(botDir, 'package.json'), botPkg, { spaces: 2 });
 
         // 4. Update bots.json
-        const bots = await fs.readJson(BOTS_FILE);
+        const bots = await loadBots();
         bots.push({
             name: answers.name,
             token: answers.token,
@@ -120,7 +155,7 @@ bot.on('message', (msg) => {
             path: botDir,
             createdAt: new Date().toISOString()
         });
-        await fs.writeJson(BOTS_FILE, bots, { spaces: 2 });
+        await saveBots(bots);
 
         spinner.succeed(chalk.green(`Bot created successfully!`));
         console.log(chalk.blue(`\nSubdomain: `) + chalk.white(subdomain));
@@ -145,7 +180,7 @@ bot.on('message', (msg) => {
             case '1. Start Bot (Coming Soon)':
                 console.log(chalk.yellow('\n[Info] This feature is coming soon!'));
                 await pause();
-                return createBotFlow(); // Loop back or go elsewhere? Let's go back to menu for now
+                return createBotFlow();
             case '2. Create Another Bot':
                 return createBotFlow();
             case '3. Back to Main Menu':
@@ -168,7 +203,7 @@ bot.on('message', (msg) => {
  */
 async function listBots() {
     try {
-        const bots = await fs.readJson(BOTS_FILE);
+        const bots = await loadBots();
         if (bots.length === 0) {
             console.log(chalk.yellow('\nNo bots found.'));
         } else {
@@ -189,7 +224,7 @@ async function listBots() {
  */
 async function deleteBot() {
     try {
-        const bots = await fs.readJson(BOTS_FILE);
+        const bots = await loadBots();
         if (bots.length === 0) {
             console.log(chalk.yellow('\nNo bots to delete.'));
             await pause();
@@ -215,7 +250,7 @@ async function deleteBot() {
 
         if (confirm) {
             bots.splice(botIndex, 1);
-            await fs.writeJson(BOTS_FILE, bots, { spaces: 2 });
+            await saveBots(bots);
             console.log(chalk.green(`\nBot removed from manager.`));
         }
 
@@ -227,7 +262,7 @@ async function deleteBot() {
 }
 
 /**
- * Launch Bot Process
+ * Utility: Pause
  */
 async function pause() {
     return inquirer.prompt([{ type: 'input', name: 'key', message: 'Press Enter to continue...' }]);
